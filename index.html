@@ -292,6 +292,7 @@ function render(){
   if((P.t&&!tracker(P.t))||(P.f&&!friend(P.f))||(view==='edit'&&!txById(P.x)))enter();
   var si=statusInfo();
   var h='<header><h1>Finance Manager</h1><button id="status" class="'+si[1]+'" data-act="go" data-h="settings">'+esc(si[0])+'</button></header>';
+  if(typeof updReady!=='undefined'&&updReady)h+='<div class="card" style="display:flex;align-items:center;gap:10px;margin-bottom:12px;border-color:var(--acc)"><span class="grow"><b>Update ready</b><span class="s" style="display:block">It installs when you finish this screen.</span></span><button class="btn pri sm" data-act="doupdate">Update now</button></div>';
   h+=({home:vHome,tracker:vTracker,add:vForm,edit:vForm,friends:vFriends,friend:vFriend,me:vMe,tfriend:vTFriend,settings:vSettings}[view]||vHome)();
   var cur=(view==='friends'||view==='friend')?'friends':view==='settings'?'settings':view==='me'?'me':'home';
   var tabs=[['home','▤','Trackers'],['me','◔','My spending'],['friends','☺','Friends'],['settings','⚙','Settings']];
@@ -638,6 +639,7 @@ root.addEventListener('click',function(e){
   if(el.dataset.act==='mclose'&&e.target.closest('[data-stop]')&&!e.target.closest('button'))return;
   var a=el.dataset.act,id=el.dataset.id,f,tr,b;
   switch(a){
+  case 'doupdate':updReady=false;applyUpdate();break;
   case 'go':go(el.dataset.h);break;
   case 'newt':prompt2('New tracker','', 'Create',function(v){var t={id:uid(),name:v,ts:Date.now(),archived:false};S.trackers.push(t);commit();modal=null;go('t-'+t.id);},'e.g. Murree trip, Flat, Office lunch');break;
   case 'togarc':showArchived=!showArchived;render();break;
@@ -716,7 +718,34 @@ root.addEventListener('keydown',function(e){if(e.key!=='Enter')return;
 });
 
 enter();render();
-if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('sw.js').catch(function(){});
+/* ---------- automatic app updates ---------- */
+var APP_VERSION=2,updReady=false,swReg=null;
+function busy(){return view==='add'||view==='edit'||!!modal||!!payForm;}
+var updTarget=0;
+function applyUpdate(target){updTarget=target||updTarget;
+  /* don't loop: if we already reloaded for this version in the last 15 minutes and still got the old one, wait */
+  try{var t=JSON.parse(sessionStorage.getItem('fm-upd-try')||'null');if(t&&t.v===updTarget&&Date.now()-t.at<15*60000)return;}catch(e){}
+  if(busy()){if(!updReady){updReady=true;render();}return;}
+  try{sessionStorage.setItem('fm-upd-try',JSON.stringify({v:updTarget,at:Date.now()}));sessionStorage.setItem('fm-updated','1');}catch(e){}
+  location.reload();}
+var lastCheck=0;
+function checkUpdate(force){
+  if(location.protocol==='file:'||(navigator.onLine===false))return;
+  var now=Date.now();if(!force&&now-lastCheck<60000)return;lastCheck=now;
+  if(swReg)swReg.update().catch(function(){});
+  fetch('version.json?t='+now,{cache:'no-store'}).then(function(r){return r.ok?r.json():null;}).then(function(v){
+    if(v&&Number(v.version)>APP_VERSION)applyUpdate(Number(v.version));}).catch(function(){});
+}
+if('serviceWorker' in navigator&&location.protocol!=='file:'){
+  navigator.serviceWorker.register('sw.js').then(function(r){swReg=r;}).catch(function(){});
+}
+window.addEventListener('online',function(){checkUpdate(true);});
+document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')checkUpdate(false);});
+window.addEventListener('hashchange',function(){if(updReady&&!busy())setTimeout(function(){applyUpdate();},50);});
+root.addEventListener('click',function(){if(updReady)setTimeout(function(){if(updReady&&!busy())applyUpdate();},150);});
+setInterval(function(){if(document.visibilityState==='visible')checkUpdate(false);},30*60000);
+setTimeout(function(){checkUpdate(true);},1500);
+try{if(sessionStorage.getItem('fm-updated')){sessionStorage.removeItem('fm-updated');var tt=JSON.parse(sessionStorage.getItem('fm-upd-try')||'null');if(!tt||tt.v<=APP_VERSION){sessionStorage.removeItem('fm-upd-try');setTimeout(function(){toast('App updated to the latest version');},300);}}}catch(e){}
 window.__fm={get S(){return S;},mergeIn:mergeIn,payload:payload,unsent:unsent};
 })();
 </script></body></html>

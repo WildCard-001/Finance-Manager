@@ -40,4 +40,13 @@ To bring **both** devices fully up to date: send phone → PC, then send PC → 
 The red "N changes not sent" at the top reminds you when this device has changes the other one hasn't received yet.
 
 ## Updating the app later
-Upload the changed files to the same GitHub repo. In `sw.js`, raise the version (e.g. `fm-v1` to `fm-v2`). Your data isn't affected.
+The app updates itself. Whenever it's opened, brought back to the screen, or comes back online, it checks `version.json`. If there's a newer version it reloads into it straight away, or once you finish the screen you're on, such as an expense you're typing. Your data isn't affected.
+
+To publish a change, upload the changed files and raise the version number in **three** places, all by one:
+1. `version.json`: `"version"`
+2. `index.html`: `var APP_VERSION=`
+3. `sw.js`: `VERSION = 'fm-v…'`
+
+GitHub Pages can take a few minutes to serve the new files. The app waits and tries again rather than reloading repeatedly.
+
+Data still moves between devices with **Settings → Sync** (there's no online database).
