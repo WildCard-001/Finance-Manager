@@ -779,14 +779,14 @@ root.addEventListener('keydown',function(e){if(e.key!=='Enter')return;
 
 enter();render();
 /* ---------- automatic app updates ---------- */
-var APP_VERSION=3,updReady=false,swReg=null;
+var APP_VERSION=4,updReady=false,swReg=null;
 function busy(){return view==='add'||view==='edit'||!!modal||!!payForm;}
 var updTarget=0;
 function applyUpdate(target){updTarget=target||updTarget;
   /* don't loop: if we already reloaded for this version in the last 15 minutes and still got the old one, wait */
   try{var t=JSON.parse(sessionStorage.getItem('fm-upd-try')||'null');if(t&&t.v===updTarget&&Date.now()-t.at<15*60000)return;}catch(e){}
   if(busy()){if(!updReady){updReady=true;render();}return;}
-  try{sessionStorage.setItem('fm-upd-try',JSON.stringify({v:updTarget,at:Date.now()}));sessionStorage.setItem('fm-updated','1');}catch(e){}
+  try{sessionStorage.setItem('fm-upd-try',JSON.stringify({v:updTarget,at:Date.now()}));}catch(e){}
   location.reload();}
 var lastCheck=0;
 function checkUpdate(force){
@@ -805,7 +805,11 @@ window.addEventListener('hashchange',function(){if(updReady&&!busy())setTimeout(
 root.addEventListener('click',function(){if(updReady)setTimeout(function(){if(updReady&&!busy())applyUpdate();},150);});
 setInterval(function(){if(document.visibilityState==='visible')checkUpdate(false);},30*60000);
 setTimeout(function(){checkUpdate(true);},1500);
-try{if(sessionStorage.getItem('fm-updated')){sessionStorage.removeItem('fm-updated');var tt=JSON.parse(sessionStorage.getItem('fm-upd-try')||'null');if(!tt||tt.v<=APP_VERSION){sessionStorage.removeItem('fm-upd-try');setTimeout(function(){toast('App updated to the latest version');},300);}}}catch(e){}
+/* "App updated" shows once per device, only the first time a higher version number runs */
+try{sessionStorage.removeItem('fm-updated');
+  var seenV=Number(localStorage.getItem('fm-seen-version'))||0;
+  if(seenV&&APP_VERSION>seenV)setTimeout(function(){toast('App updated to the latest version');},300);
+  if(APP_VERSION!==seenV)localStorage.setItem('fm-seen-version',String(APP_VERSION));}catch(e){}
 window.__fm={get S(){return S;},mergeIn:mergeIn,payload:payload,unsent:unsent};
 })();
 </script></body></html>
