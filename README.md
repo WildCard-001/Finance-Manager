@@ -4,7 +4,7 @@ Offline expense-splitting app (installable web app). Live at https://wildcard-00
 
 ## Setup
 
-There's no database and no sign-in. Your data lives only on your phone and your PC, and you move it between them yourself.
+Works fully offline. Data is saved on each device, and syncs between your phone and PC automatically through your own free Firebase database (optional — manual sync with a file still works).
 
 ## 1. Put the app online, once (GitHub Pages, free)
 The iPhone can only install an offline app from a web link, so the app's files need a home. GitHub holds **only the app's code, never your data**.
@@ -25,7 +25,45 @@ The iPhone can only install an offline app from a web link, so the app's files n
 2. From now on, always open it **from the home-screen icon**. The iPhone keeps that icon's data separate from Safari's.
 3. Do your first sync from the PC (see below) to get your data onto the phone.
 
-## Syncing (whenever you like)
+
+## Automatic sync (Firebase, free, about 10 minutes)
+Do this once, on your PC.
+
+### A. Create the database
+1. Go to https://console.firebase.google.com and sign in with your Google account.
+2. Click **Create a project** (or **Add project**). Name it e.g. `finance-manager`. You can turn off Google Analytics. Click **Create project**.
+3. In the left menu: **Build → Authentication → Get started**. Under **Sign-in method**, click **Email/Password**, turn on **Enable** (the first switch only), click **Save**.
+4. In the left menu: **Build → Firestore Database → Create database**. Pick a location near you (e.g. `asia-south1` Mumbai), choose **Start in production mode**, click **Create**.
+5. Open the **Rules** tab, replace everything with the text below, then click **Publish**:
+
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid}/{doc=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}
+```
+This means only you, signed in, can read or write your data.
+
+6. Click the ⚙ next to **Project Overview → Project settings**. Under **Your apps**, click the **</>** (Web) icon, give it a nickname, click **Register app** (leave Firebase Hosting unticked). Copy the `const firebaseConfig = { … };` block it shows. Send it to yourself (Notes or WhatsApp) so you can paste it on your phone too.
+
+### B. Turn it on in the app
+1. **PC** (the device that has your data): open the app → **Settings → Automatic sync**. Paste the config, tap **Save config**. Enter an email and a password (6+ characters) and tap **Create account**. The top of the screen shows **Synced ✓**.
+2. **iPhone**: open the app **from the home-screen icon** → **Settings → Automatic sync**. Paste the same config, tap **Save config**, enter the same email and password and tap **Sign in**. Your data appears.
+
+From then on:
+- Each change syncs within a couple of seconds when you're online, and when you open the app or come back online.
+- Offline, changes are saved on the device; the top shows **Offline · N waiting to sync** until they're sent.
+- If the same item was changed on both devices, the later change wins. Deleting on one device deletes on the other.
+- **Sign out** stops syncing on that device; its data stays.
+
+The apiKey in the config isn't a secret — Firebase uses it to know which project you mean. Your data is protected by your sign-in and the rules above.
+
+## Manual sync (backup, no account needed)
+
 On the device that has the changes, go to **Settings → Sync**:
 - **Send sync file.** On iPhone this opens the share sheet, so send it to yourself on WhatsApp, email or Save to Files. On PC the file goes to your Downloads folder.
 - Or use **Copy as text** and paste it into a WhatsApp chat with yourself.
@@ -49,4 +87,4 @@ To publish a change, upload the changed files and raise the version number in **
 
 GitHub Pages can take a few minutes to serve the new files. The app waits and tries again rather than reloading repeatedly.
 
-Data still moves between devices with **Settings → Sync** (there's no online database).
+With automatic sync on, data moves on its own; manual sync stays available as a backup.

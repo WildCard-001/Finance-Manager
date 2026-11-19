@@ -157,7 +157,7 @@ function stamp(){
   for(var k2 in prev)if(!m[k2]&&k2!=='c_cfg')S.dead[k2]=Math.max(now,(prev[k2].u||0)+1);
   prev=next;
 }
-function lsSet(){stamp();lsWrite();}
+function lsSet(){stamp();lsWrite();scheduleSync();}
 snap();lsSet();
 
 /* ---------- manual sync: send a sync file / text, merge what the other device sent ---------- */
@@ -222,9 +222,108 @@ function mergeReport(c){
   enter();render();
 }
 function ago(t){if(!t)return 'never';var s=Math.round((Date.now()-t)/1000);if(s<60)return 'just now';if(s<3600)return Math.round(s/60)+' min ago';if(s<86400)return Math.round(s/3600)+' h ago';return new Date(t).toLocaleDateString('en-GB',{day:'numeric',month:'short'});}
-function statusInfo(){var n=unsent();
+function statusInfo(){
+  if(cloudOn()){
+    if(cs.busy)return['Syncing…',''];
+    if(cs.authErr)return['Sign in again to sync','warn'];
+    var w=cloudWaiting();
+    if(cs.offline)return[w?'Offline · '+w+' waiting to sync':'Offline · saved on this device',''];
+    if(cs.err)return['Sync problem — tap to see','warn'];
+    if(w)return[w+' waiting to sync',''];
+    return['Synced ✓','ok'];}
+  var n=unsent();
   if(n&&(meta.lastOut||meta.lastIn))return[n+' change'+(n===1?'':'s')+' not sent','warn'];
   return['Saved on this device',''];}
+
+/* ---------- automatic online sync: Firebase email/password sign-in + Firestore, over REST ----------
+   One document per record at users/<uid>/recs/<key>: u = last edit time, x = deleted, j = the record as JSON,
+   s = server time of the write (used to fetch only what changed). Latest edit wins, per record. */
+var CCFG='fm-cloud-cfg',CAUTH='fm-cloud-auth',CMETA='fm-cloud-meta';
+var cfg=jget(CCFG),cauth=jget(CAUTH),cm=jget(CMETA)||{};if(!cm.cloud)cm.cloud={};
+var cs={busy:false,again:false,err:'',authErr:false,offline:false,timer:null};
+function cloudOn(){return !!(cfg&&cfg.apiKey&&cfg.projectId&&cauth&&cauth.refreshToken&&cauth.uid);}
+function saveCm(){jset(CMETA,cm);}
+function cloudWaiting(){var v=curVersions(),n=0;for(var k in v)if(cm.cloud[k]!==v[k])n++;return n;}
+function parseConfig(txt){
+  var k=/apiKey["']?\s*[:=]\s*["']([^"']+)["']/.exec(txt),p=/projectId["']?\s*[:=]\s*["']([^"']+)["']/.exec(txt);
+  if(k&&p)return{apiKey:k[1].trim(),projectId:p[1].trim()};
+  try{var o=JSON.parse(txt);if(o.apiKey&&o.projectId)return{apiKey:o.apiKey,projectId:o.projectId};}catch(e){}
+  return null;}
+function jfetch(url,opt){return fetch(url,opt).then(function(r){return r.text().then(function(t){var j=null;try{j=t?JSON.parse(t):null;}catch(e){}
+  if(!r.ok){var m=(j&&j.error&&(j.error.message||j.error.status))||('HTTP '+r.status);if(Array.isArray(j)&&j[0]&&j[0].error)m=j[0].error.message||j[0].error.status;
+    var er=new Error(String(m));er.status=r.status;throw er;}
+  return j;});});}
+var AUTH_ERR={EMAIL_EXISTS:'An account with this email already exists — tap Sign in instead.',EMAIL_NOT_FOUND:'No account with this email — tap Create account.',INVALID_PASSWORD:'Wrong password.',INVALID_LOGIN_CREDENTIALS:'Wrong email or password.',INVALID_EMAIL:'That email doesn’t look right.',MISSING_PASSWORD:'Enter a password.',OPERATION_NOT_ALLOWED:'Email/Password sign-in isn’t turned on in Firebase (Authentication → Sign-in method).',CONFIGURATION_NOT_FOUND:'Authentication isn’t set up in Firebase yet (Build → Authentication → Get started).',TOO_MANY_ATTEMPTS_TRY_LATER:'Too many attempts — try again in a few minutes.',USER_DISABLED:'This account is disabled.'};
+function authErr(m){m=String(m||'');if(/^WEAK_PASSWORD/.test(m))return 'Password must be at least 6 characters.';
+  if(/API key not valid|API_KEY_INVALID/.test(m))return 'The Firebase config is wrong — paste it again.';
+  if(/Failed to fetch|NetworkError|Load failed/i.test(m))return 'No internet connection.';
+  return AUTH_ERR[m.split(' ')[0]]||('Sign-in failed: '+m);}
+function signIn(email,pw,create){
+  return jfetch('https://identitytoolkit.googleapis.com/v1/accounts:'+(create?'signUp':'signInWithPassword')+'?key='+encodeURIComponent(cfg.apiKey),
+    {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email,password:pw,returnSecureToken:true})})
+  .then(function(r){cauth={uid:r.localId,email:r.email||email,idToken:r.idToken,refreshToken:r.refreshToken,exp:Date.now()+(Number(r.expiresIn)||3600)*1000-60000};
+    jset(CAUTH,cauth);cm={cloud:{},cursor:'',last:0};saveCm();cs.err='';cs.authErr=false;});}
+function signOut(){cauth=null;jset(CAUTH,null);cm={cloud:{},cursor:'',last:0};saveCm();cs.err='';cs.authErr=false;}
+function token(){
+  if(cauth.idToken&&Date.now()<cauth.exp)return Promise.resolve(cauth.idToken);
+  return jfetch('https://securetoken.googleapis.com/v1/token?key='+encodeURIComponent(cfg.apiKey),{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:'grant_type=refresh_token&refresh_token='+encodeURIComponent(cauth.refreshToken)})
+  .then(function(r){cauth.idToken=r.id_token;cauth.refreshToken=r.refresh_token||cauth.refreshToken;cauth.exp=Date.now()+(Number(r.expires_in)||3600)*1000-60000;jset(CAUTH,cauth);return cauth.idToken;},
+    function(e){if(e.status===400||e.status===401||e.status===403)e.auth=true;throw e;});}
+function docRoot(){return 'projects/'+cfg.projectId+'/databases/(default)/documents';}
+function fsCall(path,body){return token().then(function(t){return jfetch('https://firestore.googleapis.com/v1/'+docRoot()+path,
+  {method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+t},body:JSON.stringify(body)});});}
+function pull(){
+  var start=cm.cursor||'1970-01-01T00:00:00Z';
+  return fsCall('/users/'+cauth.uid+':runQuery',{structuredQuery:{from:[{collectionId:'recs'}],
+    where:{fieldFilter:{field:{fieldPath:'s'},op:'GREATER_THAN_OR_EQUAL',value:{timestampValue:start}}},
+    orderBy:[{field:{fieldPath:'s'},direction:'ASCENDING'}],limit:1000}})
+  .then(function(rows){
+    var items=(rows||[]).filter(function(r){return r&&r.document;}).map(function(r){var d=r.document,f=d.fields||{};
+      return{k:d.name.split('/').pop(),u:Number(f.u&&f.u.integerValue)||0,x:!!(f.x&&f.x.booleanValue),j:(f.j&&f.j.stringValue)||'',s:(f.s&&f.s.timestampValue)||''};});
+    if(!items.length)return;
+    /* trackers and friends first, so transactions never point at something missing */
+    items.sort(function(p,q){return (p.k[0]==='x')-(q.k[0]==='x');});
+    var changed=0,newest=cm.cursor||'';
+    items.forEach(function(it){if(it.s>newest)newest=it.s;
+      var data=null;if(!it.x){try{data=JSON.parse(it.j);}catch(e){return;}}
+      if(applyRemote(it.k,data,it.u,it.x))changed++;
+      cm.cloud[it.k]=it.x?-it.u:it.u;});
+    if(changed){bump();
+      S.txns.forEach(function(t){if(!tracker(t.tracker))S.trackers.push({id:t.tracker,name:'Recovered',ts:Date.now(),archived:false});});
+      snap();stamp();lsWrite();cloudChanged();}
+    var full=items.length>=1000&&newest!==cm.cursor;cm.cursor=newest;saveCm();
+    if(full)return pull();
+  });}
+function push(){
+  var v=curVersions(),m=recMap(),writes=[],keys=[];
+  for(var k in v){if(cm.cloud[k]===v[k])continue;
+    var dead=v[k]<0,u=Math.abs(v[k]);
+    if(cm.cloud[k]!=null&&Math.abs(cm.cloud[k])>u)continue; /* the online copy is newer; the next pull brings it */
+    var j=dead?'':(k==='c_cfg'?JSON.stringify({currency:S.currency}):bare(m[k]));
+    writes.push({update:{name:docRoot()+'/users/'+cauth.uid+'/recs/'+k,fields:{u:{integerValue:String(u)},x:{booleanValue:dead},j:{stringValue:j}}},
+      updateTransforms:[{fieldPath:'s',setToServerValue:'REQUEST_TIME'}]});
+    keys.push([k,v[k]]);}
+  var p=Promise.resolve();
+  for(var i=0;i<writes.length;i+=400)(function(w,ks){p=p.then(function(){return fsCall(':commit',{writes:w}).then(function(){ks.forEach(function(kv){cm.cloud[kv[0]]=kv[1];});saveCm();});});})(writes.slice(i,i+400),keys.slice(i,i+400));
+  return p;}
+var cloudRender=false;
+function cloudChanged(){if(typeof busy==='function'&&busy()){cloudRender=true;return;}try{var y=window.scrollY;render();window.scrollTo(0,y);}catch(e){}}
+function syncMsg(e){var m=String(e&&e.message||e||'');
+  if(e&&e.auth)return 'Your sign-in expired — sign in again.';
+  if(/PERMISSION_DENIED|Missing or insufficient permissions/i.test(m))return 'Firebase refused access — check the Firestore rules in the setup guide.';
+  if(/NOT_FOUND|does not exist/i.test(m))return 'The Firestore database isn’t created yet (Build → Firestore Database → Create database).';
+  return m||'Unknown error';}
+function runSync(){
+  if(typeof cs==='undefined'||!cs||!cloudOn())return Promise.resolve();
+  if(cs.busy){cs.again=true;return Promise.resolve();}
+  if(navigator.onLine===false){cs.offline=true;refreshStatus();return Promise.resolve();}
+  cs.busy=true;refreshStatus();
+  return pull().then(push).then(function(){cs.err='';cs.authErr=false;cs.offline=false;cm.last=Date.now();saveCm();},
+    function(e){if(e&&e.auth){cs.authErr=true;cs.err=syncMsg(e);}else if(!e||!e.status){cs.offline=true;}else cs.err=syncMsg(e);})
+  .then(function(){cs.busy=false;refreshStatus();if(view==='settings'&&!modal)cloudChanged();
+    if(cs.again){cs.again=false;scheduleSync(300);}});}
+function scheduleSync(ms){if(typeof cs==='undefined'||!cs||!cloudOn())return;clearTimeout(cs.timer);cs.timer=setTimeout(runSync,ms==null?1500:ms);}
 function refreshStatus(){var el=document.getElementById('status');if(el){var i=statusInfo();el.textContent=i[0];el.className=i[1];}}
 function commit(){S.updatedAt=Date.now();lsSet();refreshStatus();}
 
@@ -574,10 +673,32 @@ function vMe(){
 }
 
 /* ---------- settings + sync screen ---------- */
+function cloudCard(){
+  var h='<h2>Automatic sync</h2><div class="card">';
+  if(cloudOn()){
+    h+='<div class="prow" style="border:0;padding-top:0"><span class="grow"><span class="t">Signed in as '+esc(cauth.email||'')+'</span><span class="s">'+esc(statusInfo()[0])+' · last synced '+esc(ago(cm.last))+'</span></span></div>';
+    if(cs.err)h+='<div class="msg neg">'+esc(cs.err)+'</div>';
+    h+='<div class="note">Changes sync on their own when you’re online. Offline changes are saved here and sent later. If something was changed on both devices, the later change wins.</div>';
+    h+='<div class="btns">'+(cs.authErr?'':'<button class="btn pri" data-act="syncnow">Sync now</button>')+'<button class="btn" data-act="signout">Sign out</button></div>';
+    if(cs.authErr)h+=signForm(true);
+    return h+'</div>';}
+  if(!cfg){
+    h+='<div class="note" style="margin-top:0">Keep this device and your other device in step automatically, through your own free Firebase database. Setup takes about 10 minutes — see the guide on GitHub (README, “Automatic sync”).</div>';
+    h+='<label class="f">Paste your Firebase config</label><textarea id="cfgin" rows="4" placeholder="const firebaseConfig = { apiKey: &quot;…&quot;, projectId: &quot;…&quot;, … };"></textarea>';
+    h+='<div class="btns"><button class="btn pri" data-act="cfgsave">Save config</button></div>';
+    return h+'</div>';}
+  h+='<div class="note" style="margin-top:0">Firebase project: <b>'+esc(cfg.projectId)+'</b> · <button class="linkbtn" data-act="cfgclear">change</button></div>';
+  h+=signForm(false);
+  return h+'</div>';}
+function signForm(again){
+  return '<label class="f">Email</label><input id="sem" type="email" autocomplete="username" value="'+esc(again&&cauth?cauth.email:'')+'">'+
+    '<label class="f">Password</label><input id="spw" type="password" autocomplete="current-password" placeholder="At least 6 characters">'+
+    '<div class="btns"><button class="btn pri" data-act="signin">Sign in</button>'+(again?'':'<button class="btn" data-act="signup">Create account</button>')+'</div>'+
+    '<div class="msg" id="smsg"></div>'+(again?'':'<div class="note">Create the account once, on your first device. On your other device, use <b>Sign in</b> with the same email and password.</div>');}
 function vSettings(){
   var n=unsent();
-  return '<h2>Appearance on this device</h2><div class="card"><div class="seg">'+[['auto','Automatic'],['light','Light'],['dark','Dark']].map(function(t){return '<button class="'+(theme===t[0]?'on':'')+'" data-act="themeset" data-t="'+t[0]+'">'+t[1]+'</button>';}).join('')+'</div><div class="note">Automatic follows your phone or computer’s dark mode setting. Each device remembers its own choice.</div></div>'+
-  '<h2>Sync with your other device</h2><div class="card">'+
+  return cloudCard()+'<h2>Appearance on this device</h2><div class="card"><div class="seg">'+[['auto','Automatic'],['light','Light'],['dark','Dark']].map(function(t){return '<button class="'+(theme===t[0]?'on':'')+'" data-act="themeset" data-t="'+t[0]+'">'+t[1]+'</button>';}).join('')+'</div><div class="note">Automatic follows your phone or computer’s dark mode setting. Each device remembers its own choice.</div></div>'+
+  '<h2>'+(cloudOn()?'Manual sync (backup)':'Sync with your other device')+'</h2><div class="card">'+
     '<div class="note" style="margin-top:0">No internet account needed. Send your data from one device and receive it on the other — the newer version of each item is kept, so nothing gets overwritten by mistake. Do it both ways to bring both devices fully up to date.</div>'+
     '<div class="prow" style="border:0"><span class="grow"><span class="t">Send from this device</span><span class="s">Last sent '+esc(ago(meta.lastOut))+(n&&(meta.lastOut||meta.lastIn)?' · <span class="neg">'+n+' change'+(n===1?'':'s')+' since</span>':'')+'</span></span></div>'+
     '<div class="btns" style="margin-top:4px"><button class="btn pri" data-act="sendfile">Send sync file</button><button class="btn" data-act="sendtext">Copy as text</button></div>'+
@@ -749,9 +870,18 @@ root.addEventListener('click',function(e){
   case 'backup':copy(JSON.stringify(S),'Backup copied');break;
   case 'restore':var txt=(document.getElementById('restore')||{}).value||'',d;try{d=JSON.parse(txt);}catch(er){}
     if(!d||!d.v||!Array.isArray(d.friends)||!Array.isArray(d.txns)){toast('That doesn’t look like a backup.');break;}
-    ask('Replace all data?','Current data will be replaced with the backup ('+d.friends.length+' friends, '+d.txns.length+' transactions)'+' on this device (send a sync afterwards to remove it from your other device too)'+'.','Restore',function(){var dead=S.dead,cu=S.cfgU;S=migrate(d);S.dead=Object.assign({},dead,S.dead);if(S.cfgU==null)S.cfgU=cu;commit();toast('Backup restored');go('home');},true);break;
-  case 'erase':ask('Erase everything?','All trackers, friends and transactions will be deleted'+' on this device (send a sync afterwards to remove it from your other device too)'+'.','Erase',function(){var dead=S.dead,cu=S.cfgU;S=blank();S.dead=dead;S.cfgU=cu;clearDraft();commit();go('home');},true);break;
+    ask('Replace all data?','Current data will be replaced with the backup ('+d.friends.length+' friends, '+d.txns.length+' transactions)'+(cloudOn()?' on this device and, through sync, on your other device too':' on this device (send a sync afterwards to remove it from your other device too)')+'.','Restore',function(){var dead=S.dead,cu=S.cfgU;S=migrate(d);S.dead=Object.assign({},dead,S.dead);if(S.cfgU==null)S.cfgU=cu;commit();toast('Backup restored');go('home');},true);break;
+  case 'erase':ask('Erase everything?','All trackers, friends and transactions will be deleted'+(cloudOn()?' on this device and, through sync, on your other device too':' on this device (send a sync afterwards to remove it from your other device too)')+'.','Erase',function(){var dead=S.dead,cu=S.cfgU;S=blank();S.dead=dead;S.cfgU=cu;clearDraft();commit();go('home');},true);break;
   case 'sendfile':sendFile();break;
+  case 'cfgsave':var pc=parseConfig((document.getElementById('cfgin')||{}).value||'');if(!pc){toast('That doesn’t look like a Firebase config — it needs apiKey and projectId.');break;}cfg=pc;jset(CCFG,cfg);render();break;
+  case 'cfgclear':ask('Change Firebase project?','You’ll paste a new config and sign in again. Your data on this device stays.','Change',function(){cfg=null;jset(CCFG,null);signOut();});break;
+  case 'signin':case 'signup':(function(create){var em=((document.getElementById('sem')||{}).value||'').trim(),pw=(document.getElementById('spw')||{}).value||'',msg=document.getElementById('smsg');
+      if(!em||!pw){if(msg){msg.className='msg neg';msg.textContent='Enter your email and password.';}return;}
+      if(msg){msg.className='msg';msg.textContent=create?'Creating account…':'Signing in…';}
+      signIn(em,pw,create).then(function(){toast(create?'Account created — syncing':'Signed in — syncing');render();return runSync();},
+        function(e){var m=document.getElementById('smsg');if(m){m.className='msg neg';m.textContent=authErr(e&&e.message);}});})(a==='signup');break;
+  case 'signout':ask('Sign out of automatic sync?','Your data stays on this device. It just stops syncing until you sign in again.','Sign out',function(){signOut();});break;
+  case 'syncnow':runSync().then(function(){toast(cs.err?cs.err:cs.offline?'You’re offline — will sync later':'Synced');});break;
   case 'sendtext':sendText();break;
   case 'mergetext':mergeReport(mergeIn((document.getElementById('synctext')||{}).value||''));break;
   case 'mclose':modal=null;render();break;
@@ -779,7 +909,7 @@ root.addEventListener('keydown',function(e){if(e.key!=='Enter')return;
 
 enter();render();
 /* ---------- automatic app updates ---------- */
-var APP_VERSION=4,updReady=false,swReg=null;
+var APP_VERSION=5,updReady=false,swReg=null;
 function busy(){return view==='add'||view==='edit'||!!modal||!!payForm;}
 var updTarget=0;
 function applyUpdate(target){updTarget=target||updTarget;
@@ -805,6 +935,14 @@ window.addEventListener('hashchange',function(){if(updReady&&!busy())setTimeout(
 root.addEventListener('click',function(){if(updReady)setTimeout(function(){if(updReady&&!busy())applyUpdate();},150);});
 setInterval(function(){if(document.visibilityState==='visible')checkUpdate(false);},30*60000);
 setTimeout(function(){checkUpdate(true);},1500);
+/* automatic sync triggers */
+setTimeout(function(){runSync();},600);
+window.addEventListener('online',function(){cs.offline=false;runSync();});
+window.addEventListener('offline',function(){cs.offline=true;refreshStatus();});
+document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')runSync();});
+setInterval(function(){if(document.visibilityState==='visible')runSync();},60000);
+window.addEventListener('hashchange',function(){if(cloudRender&&!busy()){cloudRender=false;setTimeout(render,0);}});
+root.addEventListener('click',function(){if(cloudRender)setTimeout(function(){if(cloudRender&&!busy()){cloudRender=false;render();}},200);});
 /* "App updated" shows once per device, only the first time a higher version number runs */
 try{sessionStorage.removeItem('fm-updated');
   var seenV=Number(localStorage.getItem('fm-seen-version'))||0;
