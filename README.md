@@ -2,6 +2,8 @@
 
 Offline expense-splitting app (installable web app). Live at https://wildcard-001.github.io/Finance-Manager/
 
+There is also a **Local version with no sync at all**: https://wildcard-001.github.io/Finance-Manager/local/ — see [Local version](#local-version-no-sync) below.
+
 ## Setup
 
 Works fully offline. Data is saved on each device, and syncs between your phone and PC automatically through your own free Firebase database (optional — manual sync with a file still works).
@@ -88,3 +90,13 @@ To publish a change, upload the changed files and raise the version number in **
 GitHub Pages can take a few minutes to serve the new files. The app waits and tries again rather than reloading repeatedly.
 
 With automatic sync on, data moves on its own; manual sync stays available as a backup.
+
+## Local version (no sync)
+https://wildcard-001.github.io/Finance-Manager/local/ (files in the `local/` folder)
+
+The same app with every sync feature removed: no Firebase, no account, no sync files, and nothing is ever sent online. Data stays only on the device it was entered on. Good for anyone who wants to use the app without a database. Everything else works the same: trackers, splits, paid-back marks, My spending, Excel, reminders, dark mode, offline use and installing to the home screen or PC.
+
+- **Separate data.** It keeps its data under its own storage keys (`fml-…`), so it never sees or changes the main app's data, even on the same device and browser. It has its own service worker and cache (`fml-v…`) and installs as a separate app called **Finance Local**.
+- **Backups matter.** With no sync, a backup is the only copy outside the device. Use **Settings → Backup → Save backup file** now and then. **Open backup file** restores one, and it also accepts a backup or a **sync file** from the main app (this *replaces* all data in the Local version).
+- **Shared files.** It uses the main app's `xlsx.full.min.js` and icons from the folder above, so keep those in the root.
+- **Updating it:** raise the number in the three places inside `local/` — `local/version.json`, `var APP_VERSION=` in `local/index.html`, and `VERSION = 'fml-v…'` in `local/sw.js`. Changes made to the main `index.html` aren't copied over automatically; port them to `local/index.html` as well.

@@ -1,7 +1,7 @@
 /* Finance Manager service worker: keeps the app available offline and picks up new versions automatically.
    When you change the app: raise "version" in version.json AND APP_VERSION in index.html (same number),
    and raise VERSION below. */
-var VERSION = 'fm-v5';
+var VERSION = 'fm-v6';
 var FILES = ['./', 'index.html', 'manifest.json', 'xlsx.full.min.js', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', function (e) {
@@ -10,7 +10,7 @@ self.addEventListener('install', function (e) {
 
 self.addEventListener('activate', function (e) {
   e.waitUntil(caches.keys().then(function (keys) {
-    return Promise.all(keys.filter(function (k) { return k !== VERSION; }).map(function (k) { return caches.delete(k); }));
+    return Promise.all(keys.filter(function (k) { return k.indexOf('fm-v') === 0 && k !== VERSION; }).map(function (k) { return caches.delete(k); }));
   }).then(function () { return self.clients.claim(); }));
 });
 
@@ -20,6 +20,8 @@ self.addEventListener('fetch', function (e) {
   var req = e.request, url = new URL(req.url);
   if (req.method !== 'GET' || url.origin !== self.location.origin) return;
   var path = url.pathname;
+  /* the separate no-sync version in /local/ has its own service worker */
+  if (path.indexOf('/local/') !== -1) return;
 
   /* version.json: always ask the network, never cache (it's how the app learns about updates). */
   if (/version\.json$/.test(path)) { e.respondWith(fetch(req, { cache: 'no-store' })); return; }

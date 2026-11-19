@@ -909,7 +909,7 @@ root.addEventListener('keydown',function(e){if(e.key!=='Enter')return;
 
 enter();render();
 /* ---------- automatic app updates ---------- */
-var APP_VERSION=5,updReady=false,swReg=null;
+var APP_VERSION=6,updReady=false,swReg=null;
 function busy(){return view==='add'||view==='edit'||!!modal||!!payForm;}
 var updTarget=0;
 function applyUpdate(target){updTarget=target||updTarget;
