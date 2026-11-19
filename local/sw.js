@@ -1,7 +1,7 @@
 /* Finance Manager Local service worker: keeps this version available offline and picks up new versions automatically.
    When you change the app: raise "version" in version.json AND APP_VERSION in index.html (same number),
    and raise VERSION below. */
-var VERSION = 'fml-v1';
+var VERSION = 'fml-v2';
 var FILES = ['./', 'index.html', 'manifest.json', '../xlsx.full.min.js', '../icon-192.png', '../icon-512.png', '../apple-touch-icon.png'];
 
 self.addEventListener('install', function (e) {
